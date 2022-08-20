@@ -22,11 +22,11 @@ source "googlecompute" "custom" {
   image_family      = join("-", [var.workspace.name, var.machine.source_image_family])
 
 
-  machine_type = "c2-standard-8"
+  machine_type     = "c2-standard-8"
   min_cpu_platform = "Intel Cascade Lake"
-  network      = "${var.workspace.name}-network"
-  subnetwork   = "${var.workspace.name}-subnet"
-  tags         = [var.workspace.name]
+  network          = "${var.workspace.name}-network"
+  subnetwork       = "${var.workspace.name}-subnet"
+  tags             = [var.workspace.name]
 
   disk_size = 20
   disk_type = "pd-ssd"
