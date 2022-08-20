@@ -1,11 +1,5 @@
 #!/bin/bash
 
-# Wait for APT updates to end
-while  fuser /var/lib/dpkg/lock; do
-   echo "waiting for external APT process to terminate..."
-   sleep 5
-done
-
 if [ -z "$SERVER_KEY" ]; then
    echo "No private key SERVER_KEY found."
    exit 1
@@ -17,12 +11,12 @@ if [ -z "$SERVER_CERT" ]; then
 fi
 
 echo "Loading certificate private key."
-echo "$SERVER_KEY" > /etc/ssl/private/server.key
+echo "$SERVER_KEY" | base64 --decode > /etc/ssl/private/server.key
 chown root:root /etc/ssl/private/server.key
 chmod 400 /etc/ssl/private/server.key
 
 echo "Loading certificate public key."
-echo "$SERVER_CERT" > tee /etc/ssl/certs/server.pem
+echo "$SERVER_CERT" | base64 --decode > /etc/ssl/certs/server.pem
 chown root:root /etc/ssl/certs/server.pem
 chmod 600 /etc/ssl/certs/server.pem
 
@@ -39,7 +33,7 @@ fi
 echo "Public key successfully loaded."
 
 echo "Testing if public and private SSL keys match."
-if ! [ "$(openssl rsa -noout -modulus -in s/etc/ssl/private/server.key | openssl md5)"=="$(openssl x509 -noout -modulus -in /etc/ssl/certs/server.pem | openssl md5)" ]; then
+if ! [ "$(openssl rsa -noout -modulus -in /etc/ssl/private/server.key | openssl md5)"=="$(openssl x509 -noout -modulus -in /etc/ssl/certs/server.pem | openssl md5)" ]; then
    echo "Public and private keys do not match."
    exit 1
 fi
@@ -177,7 +171,7 @@ if ! ninja --version; then
   exit 1
 fi
 
-wget -qO /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/download/v1.12.0/bazelisk-linux-amd64
+curl -s -L -o /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/download/v1.12.0/bazelisk-linux-amd64
 chmod +x /usr/local/bin/bazel
 
 if ! bazel --version; then
