@@ -164,7 +164,8 @@ DEBIAN_FRONTEND=noninteractive apt-get --quiet -y install \
    unzip \
    python3-pip \
    virtualenv \
-   ninja-build
+   ninja-build \
+   git
 
 if ! ninja --version; then
   echo 'Error could not find ninja builder'
