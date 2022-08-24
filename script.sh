@@ -1,83 +1,153 @@
 #!/bin/bash
 
-if [ -z "$SERVER_KEY" ]; then
-   echo "No private key SERVER_KEY found."
+# Define global shortcuts and variables
+
+## Environment variables for executables
+export DEBIAN_FRONTEND=noninteractive
+export GOROOT='/usr/local/go'
+export GOPATH="$HOME/go"
+
+## Variables for script
+OS_RELEASE_NAME=$(lsb_release -cs)
+GO_URL='https://go.dev/dl/go1.18.3.linux-amd64.tar.gz'
+BAZEL_URL='https://github.com/bazelbuild/bazelisk/releases/download/v1.12.0/bazelisk-linux-amd64'
+BAZEL_PATH='/usr/local/bin/bazel'
+SERVER_KEY_PATH='/etc/ssl/private/server.key'
+SERVER_CERT_PATH='/etc/ssl/certs/server.pem'
+LLVM_URL='apt.llvm.org'
+LLVM_PKG='libllvm14 llvm-14 llvm-14-runtime clang-14 clang-tools-14 libclang1-14 clang-format-14 python3-clang-14 clangd-14 clang-tidy-14 lldb-14 lld-14 mlir-14-tools'
+LLVM_PATH='/usr/lib/llvm-14/'
+ENVOY_PATH='/usr/local/bin/envoy'
+ENVOY_DIRECTORY='/etc/envoy'
+ENVOY_CONFIGURATION_FILE="$ENVOY_DIRECTORY/envoy.yaml"
+ENVOY_SERVICE_FILE='/etc/systemd/system/envoy.service'
+
+get () {
+   apt-get install -y -qq --no-show-upgraded $@ >/dev/null
+   return $?
+}
+
+info () {
+   echo "$(date) - $(hostname) - INFO - $*"
+   return 0
+}
+
+error () {
+   echo "$(date) - $(hostname) - ERROR - $*"
+   echo "********** Build Failed. **********"
    exit 1
+   return 1
+}
+
+# Set default umask for files created
+umask 0022
+
+info "Adding basic tools"
+apt-get update -qq --no-show-upgraded >/dev/null
+get git cmake ninja-build python3-distutils
+info "Git: $(git --version)"
+info "CMAKE: $(cmake --version | head -n 1)"
+info "Ninja: $(ninja --version)"
+
+
+info "Adding CLang/LLVM to APT repos."
+curl -sL "https://$LLVM_URL/llvm-snapshot.gpg.key" | apt-key add -
+echo "deb http://$LLVM_URL/$OS_RELEASE_NAME/ llvm-toolchain-$OS_RELEASE_NAME-14 main" > /etc/apt/sources.list.d/llvm.list
+
+if ! apt-get update -qq --no-show-upgraded >/dev/null; then
+   error "Could not update APT repos with CLang/LLVM."
 fi
+info "CLang/LLVM repos succesfully added to APT sources."
 
-if [ -z "$SERVER_CERT" ]; then
-   echo "No public certificate SERVER_CERT found."
-   exit 1
+info "Installing CLang/LLVM."
+get "$LLVM_PKG"
+if ! [ -d $LLVM_PATH ]; then
+   error "CLang/LLVM librairies not found were not found on path $LLVM_PATH."
 fi
+info "CLang/LLVM librairies succesfully installed on path $LLVM_PATH."
 
-echo "Loading certificate private key."
-echo "$SERVER_KEY" | base64 --decode > /etc/ssl/private/server.key
-chown root:root /etc/ssl/private/server.key
-chmod 400 /etc/ssl/private/server.key
 
-echo "Loading certificate public key."
-echo "$SERVER_CERT" | base64 --decode > /etc/ssl/certs/server.pem
-chown root:root /etc/ssl/certs/server.pem
-chmod 600 /etc/ssl/certs/server.pem
-
-if ! test -s /etc/ssl/private/server.key; then
-   echo "Private key /etc/ssl/private/server.key was not correctly written."
-   exit 1
+info "Installing Bazel."
+RC=$(curl -sL -o $BAZEL_PATH -w '%{http_code}' "$BAZEL_URL")
+if [ $RC != 200 ]; then
+   error "Could not download Bazel from source : $BAZEL_URL."
 fi
-echo "Private key successfully loaded."
-
-if ! test -s /etc/ssl/certs/server.pem; then
-   echo "public certificate /etc/ssl/certs/server.pem was not correctly written."
-   exit 1
+if ! [ -f $BAZEL_PATH ]; then
+   error "Could not find Bazel binary file."
 fi
-echo "Public key successfully loaded."
-
-echo "Testing if public and private SSL keys match."
-if ! [ "$(openssl rsa -noout -modulus -in /etc/ssl/private/server.key | openssl md5)"=="$(openssl x509 -noout -modulus -in /etc/ssl/certs/server.pem | openssl md5)" ]; then
-   echo "Public and private keys do not match."
-   exit 1
+chmod +x $BAZEL_PATH
+if ! bazel --version; then
+  error "Could not execute Bazel binary."
 fi
-echo "Public and private keys match perfectly."
+info "Bazel succesfully installed."
 
-echo "Configuring envoy service to systemd."
-cat | tee /etc/systemd/system/envoy.service > /dev/null <<EOF
-[Unit]
-Description=The ENVOY proxy server
-After=syslog.target network-online.target remote-fs.target nss-lookup.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-PIDFile=/run/envoy.pid
-ExecStartPre=/bin/bash -c '/usr/local/bin/envoy --mode validate -c /etc/envoy.yaml | tee'
-ExecStart=/bin/bash -c '/usr/local/bin/envoy -c /etc/envoy.yaml | tee'
-ExecStop=/bin/kill -s QUIT $MAINPID
-PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target
-EOF
-chown root:root /etc/systemd/system/envoy.service
-chmod 644 /etc/systemd/system/envoy.service
-
-if ! test -s /etc/systemd/system/envoy.service; then
-   echo "Service file /etc/systemd/system/envoy.service was not correctly written."
-   exit 1
+info "Installing Go."
+RC=$(curl -sL -o go.tar.gz -w '%{http_code}' "$GO_URL")
+if [ $RC != 200 ]; then
+   error "Could not download Go from source : $GO_URL."
 fi
-echo "Service file envoy.service successfully loaded"
-
-if ! systemctl daemon-reload; then
-   echo "Sytemd could not read the envoy service file."
-   exit 1
+if [ -d $GOROOT ]; then
+   rm -rf $GOROOT
 fi
-if ! systemctl enable envoy; then
-   echo "Systemd could not enable the envoy service at boot."
-   exit 1
+tar -C /usr/local -xzf go.tar.gz
+rm -rf go.tar.gz
+if ! [ -x $GOROOT/bin/go ]; then
+   error "Could not find Go compiler."
 fi
-echo "Envoy service was succesfully loaded into Systemd."
+export PATH=$PATH:$GOROOT/bin
+if ! go version; then
+  error "Could not execute go compiler."
+fi
+info "Go successfully installed."
 
-echo "Loading envoy default configuration file."
-cat | tee /etc/envoy.yaml > /dev/null <<EOF
+info "Installing Buildifier utility."
+go install github.com/bazelbuild/buildtools/buildifier@5.1.0
+info "Installing Buildozer utility."
+go install github.com/bazelbuild/buildtools/buildozer@5.1.0
+
+info "Building Envoy."
+cd $HOME
+if [ -d ./envoy ]; then
+   rm -rf ./envoy
+fi
+git clone -q --branch v1.21.0 https://github.com/envoyproxy/envoy.git
+cd envoy
+bazel/setup_clang.sh $LLVM_PATH
+bazel build --config=libc++ envoy
+if [ -x bazel-bin/source/exe/envoy-static ]; then
+   mv bazel-bin/source/exe/envoy-static $ENVOY_PATH
+   chmod 555 $ENVOY_PATH
+else
+   error "Envoy did not compile."
+fi
+cd ..
+rm -rf ./envoy
+if ! envoy --version; then
+  error "Could not execute Envoy binary."
+fi
+info "Build terminated : $(envoy --version | sed -e 's/envoy\(.*\)version:\(.*\)/\2/g')"
+
+
+info "Clearing build temporary artifcats."
+# Delete Cache from Build
+rm -rf $HOME/.cache/
+# Delete bazel tool
+rm -rf $BAZEL_PATH
+# Delete go pacakges
+rm -rf $GOROOT
+# Delete GOPATH directory
+rm -rf $GOPATH
+# Delete temporary directories
+rm -rf /tmp/*
+rm -rf /var/tmp/*
+
+info "Estimating disk usage after cleaning"
+df -h
+
+
+info "Loading envoy default configuration file."
+mkdir -p $ENVOY_DIRECTORY
+cat >$ENVOY_CONFIGURATION_FILE <<EOF
 static_resources:
    listeners:
    - name: main_listener
@@ -123,9 +193,9 @@ static_resources:
             alpn_protocols: ["h2"]
             tls_certificates:
                - certificate_chain:
-                  filename: /etc/ssl/certs/server.pem
+                  filename: $SERVER_CERT_PATH
                   private_key:
-                  filename: /etc/ssl/private/server.key
+                  filename: $SERVER_KEY_PATH
    clusters:
    - name: service_workstation
       type: LOGICAL_DNS
@@ -142,128 +212,125 @@ static_resources:
                   address: 10.1.0.2
                   port_value: 443
 EOF
-chown root:root /etc/envoy.yaml
-chmod 644 /etc/envoy.yaml
 
-if ! test -s /etc/envoy.yaml; then
-   echo "Configuration file /etc/envoy.yaml was not correctly written."
-   exit 1
+if ! test -s $ENVOY_CONFIGURATION_FILE; then
+   error "Envoy default configuration file was not correctly written to $ENVOY_CONFIGURATION_FILE."
 fi
-echo "Configuration file /etc/envoy.yaml successfully loaded."
+info "Envoy default configuration file successfully written to $ENVOY_CONFIGURATION_FILE."
 
-echo "Installing build tools for envoy."
-DEBIAN_FRONTEND=noninteractive apt-get --quiet update
-DEBIAN_FRONTEND=noninteractive apt-get --quiet -y install \
-   autoconf \
-   automake \
-   cmake \
-   curl \
-   libtool \
-   make \
-   patch \
-   unzip \
-   python3-pip \
-   virtualenv \
-   ninja-build \
-   git
 
-if ! ninja --version; then
-  echo 'Error could not find ninja builder'
-  exit 1
+info "Adding server SSL private key."
+if [ -z "$SERVER_KEY" ]; then
+   error "The environment variable SERVER_KEY is empty."
 fi
-
-curl -s -L -o /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/download/v1.12.0/bazelisk-linux-amd64
-chmod +x /usr/local/bin/bazel
-
-if ! bazel --version; then
-  echo 'Error could not find bazel builder'
-  exit 1
+echo -n "$SERVER_KEY" | base64 --decode > "$SERVER_KEY_PATH"
+chmod 400 "$SERVER_KEY_PATH"
+if ! test -s "$SERVER_KEY_PATH"; then
+   error "The server SSL private key was not correctly written on file $SERVER_KEY_PATH."
 fi
+info "Server SSL private key successfully written on file $SERVER_KEY_PATH."
 
-curl -s -LO https://go.dev/dl/go1.18.3.linux-amd64.tar.gz
-if [ -d /usr/local/go ]; then
-   rm -rf /usr/local/go
+
+info "Adding server SSL certificate."
+if [ -z "$SERVER_CERT" ]; then
+   error "No public certificate SERVER_CERT found."
 fi
-tar -C /usr/local -xzf go1.18.3.linux-amd64.tar.gz
-rm -rf go1.18.3.linux-amd64.tar.gz
-export PATH=$PATH:/usr/local/go/bin
-
-if ! go version; then
-  echo 'Error could not find go'
-  exit 1
+echo -n "$SERVER_CERT" | base64 --decode > $SERVER_CERT_PATH
+chmod 600 $SERVER_CERT_PATH
+if ! test -s $SERVER_CERT_PATH; then
+   error "The server SSL certificate was not correctly written on file $SERVER_CERT_PATH."
 fi
+info "Server SSL certificate successfully written on file $SERVER_CERT_PATH."
 
-go install github.com/bazelbuild/buildtools/buildifier@5.1.0
-go install github.com/bazelbuild/buildtools/buildozer@5.1.0
 
-echo "Building envoy."
-if [ -d ./envoy ]; then
-   rm -rf ./envoy
+info "Testing if public and private SSL keys of server match."
+if ! [ "$(openssl rsa -noout -modulus -in $SERVER_KEY_PATH | openssl md5)"=="$(openssl x509 -noout -modulus -in $SERVER_CERT_PATH | openssl md5)" ]; then
+   error "Public and private SSL keys of server do not match."
 fi
+info "Public and private SSL keys of server match."
 
-git clone -q --branch v1.21.0 https://github.com/envoyproxy/envoy.git
-cd envoy
-bazel build envoy
-if [ -x bazel-bin/source/exe/envoy-static ]; then
-    mv bazel-bin/source/exe/envoy-static /usr/local/bin/envoy
+info "Testing envoy configuration file."
+if ! $ENVOY_PATH --mode validate -c $ENVOY_CONFIGURATION_FILE; then
+  error "Could not start with the default configuration."
 fi
-cd ..
-rm -rf ./envoy
-echo "Build terminated."
+info "Envoy configuration file is correct."
 
-if ! envoy --version; then
-  echo "Error could not find envoy."
-  exit 1
+
+info "Configuring envoy service to systemd."
+cat >$ENVOY_SERVICE_FILE <<EOF
+[Unit]
+Description=The ENVOY proxy server
+After=syslog.target network-online.target remote-fs.target nss-lookup.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+PIDFile=/run/envoy.pid
+ExecStartPre=/bin/bash -c "$ENVOY_PATH --mode validate -c $ENVOY_CONFIGURATION_FILE | tee"
+ExecStart=/bin/bash -c "$ENVOY_PATH -c $ENVOY_CONFIGURATION_FILE | tee"
+ExecStop=/bin/kill -s QUIT $MAINPID
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+if ! test -s $ENVOY_SERVICE_FILE; then
+   error "Service file $ENVOY_SERVICE_FILE was not correctly written."
 fi
+info "Service file $ENVOY_SERVICE_FILE successfully written."
 
-if ! /usr/local/bin/envoy --mode validate -c /etc/envoy.yaml; then
-  echo "Error could not start with the default configuration."
-  exit 1
+info "Reloading the systemd service."
+if ! systemctl daemon-reload; then
+   error "Sytemd could not read the envoy service file."
 fi
-
-# Delete Cache from Build
-rm -rf $HOME/.cache/bazel*
-# Delete bazel tool
-rm -rf /usr/local/bin/bazel
-# Delete go pacakges
-if [ -d /usr/local/go ]; then
-   rm -rf /usr/local/go
+if ! systemctl enable envoy; then
+   error "Systemd could not enable the envoy service at boot."
 fi
-# Delete buildifier and buildozer
-rm -rf $HOME/go/bin
+info "Envoy service was succesfully loaded into systemd."
 
-echo "Estimate disk usage after cleaning"
-df -h
+info "Starting envoy."
+if ! systemctl start envoy; then
+   error "Envoy failed to start as a service."
+fi
+if ! systemctl is-active envoy > /dev/null; then
+   error "Envoy service is not active."
+fi
+info "Envoy service is active."
 
-echo "Installing simple Nginx server."
-DEBIAN_FRONTEND=noninteractive apt-get --quiet update >/dev/null
-DEBIAN_FRONTEND=noninteractive apt-get --quiet -y install nginx >/dev/null
+
+info "Installing simple Nginx server."
+apt-get update -qq --no-show-upgraded >/dev/null
+get nginx
+
+sleep 10
 
 if ! systemctl is-active nginx > /dev/null; then
-   echo "Nginx service is not active."
-   exit 1
+   error "Nginx service is not active."
 fi
-echo "Nginx service is active."
+info "Nginx service is active."
 
-if ! [ $(curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:80/') == 200 ]; then
-   echo "Nginx HTTP service is not responding."
-   exit 1
+if [ "$(curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:80/')" != "200" ]; then
+   error "Nginx HTTP service is not responding."
 fi
-echo "Nginx HTTP service is correctly responding."
+info "Nginx HTTP service is correctly responding."
 
 # Disable APT sources
-echo "Removing APT packages cache and lists."
-apt-get --quiet clean >/dev/null
+info "Removing APT packages cache and lists."
+apt-get autoremove -qq -y >/dev/null
+apt-get clean -qq >/dev/null
 rm -rf /etc/apt/sources.list /etc/apt/sources.list.d/
 
 # Disable APT auto updates
-echo "Loading APT configuration to halt auto-update."
+info "Loading APT configuration to halt auto-update."
 echo -ne "APT::Periodic::Update-Package-Lists \"0\";\nAPT::Periodic::Unattended-Upgrade \"0\";" > /etc/apt/apt.conf.d/20auto-upgrades
 if ! test -s /etc/apt/apt.conf.d/20auto-upgrades; then
-   echo "Configuration file /etc/apt/apt.conf.d/20auto-upgrades was not correctly written."
-   exit 1
+   error "Configuration file /etc/apt/apt.conf.d/20auto-upgrades was not correctly written."
 fi
-echo "APT auto-update succesfully disabled."
+if ! apt-get update -qq --no-show-upgraded >/dev/null; then
+   error "APT tool is wrongly configured."
+fi
+info "APT auto-update succesfully disabled."
 
-echo -ne "\nBuild was succesful.\n"
+echo "********** Build was succesful. **********"
 exit 0
