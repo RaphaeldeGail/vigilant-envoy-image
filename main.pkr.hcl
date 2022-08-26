@@ -39,7 +39,8 @@ build {
   provisioner "shell" {
     environment_vars = [
       "SERVER_CERT=${var.machine.certificate_keystore.public}",
-      "SERVER_KEY=${var.machine.certificate_keystore.private}"
+      "SERVER_KEY=${var.machine.certificate_keystore.private}",
+      "ENVOY_CONFIGURATION=${base64encode(file("envoy.yaml"))}"
     ]
     # Will execute the script as root
     execute_command  = "sudo sh -c '{{ .Vars }} {{ .Path }}'"

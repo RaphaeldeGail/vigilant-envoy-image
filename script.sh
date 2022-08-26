@@ -49,6 +49,45 @@ info "Git: $(git --version)"
 info "CMAKE: $(cmake --version | head -n 1)"
 info "Ninja: $(ninja --version)"
 
+info "Loading envoy default configuration file."
+mkdir -p $ENVOY_DIRECTORY
+echo -ne "$ENVOY_CONFIGURATION" | base64 --decode >$ENVOY_CONFIGURATION_FILE
+
+if ! test -s $ENVOY_CONFIGURATION_FILE; then
+   error "Envoy default configuration file was not correctly written to $ENVOY_CONFIGURATION_FILE."
+fi
+info "Envoy default configuration file successfully written to $ENVOY_CONFIGURATION_FILE."
+
+
+info "Adding server SSL private key."
+if [ -z "$SERVER_KEY" ]; then
+   error "The environment variable SERVER_KEY is empty."
+fi
+echo -n "$SERVER_KEY" | base64 --decode > "$SERVER_KEY_PATH"
+chmod 400 "$SERVER_KEY_PATH"
+if ! test -s "$SERVER_KEY_PATH"; then
+   error "The server SSL private key was not correctly written on file $SERVER_KEY_PATH."
+fi
+info "Server SSL private key successfully written on file $SERVER_KEY_PATH."
+
+
+info "Adding server SSL certificate."
+if [ -z "$SERVER_CERT" ]; then
+   error "No public certificate SERVER_CERT found."
+fi
+echo -n "$SERVER_CERT" | base64 --decode > $SERVER_CERT_PATH
+chmod 600 $SERVER_CERT_PATH
+if ! test -s $SERVER_CERT_PATH; then
+   error "The server SSL certificate was not correctly written on file $SERVER_CERT_PATH."
+fi
+info "Server SSL certificate successfully written on file $SERVER_CERT_PATH."
+
+info "Testing if public and private SSL keys of server match."
+if ! [ "$(openssl rsa -noout -modulus -in $SERVER_KEY_PATH | openssl md5)"=="$(openssl x509 -noout -modulus -in $SERVER_CERT_PATH | openssl md5)" ]; then
+   error "Public and private SSL keys of server do not match."
+fi
+info "Public and private SSL keys of server match."
+
 
 info "Adding CLang/LLVM to APT repos."
 curl -sL "https://$LLVM_URL/llvm-snapshot.gpg.key" | apt-key add -
@@ -144,110 +183,6 @@ rm -rf /var/tmp/*
 info "Estimating disk usage after cleaning"
 df -h
 
-
-info "Loading envoy default configuration file."
-mkdir -p $ENVOY_DIRECTORY
-cat >$ENVOY_CONFIGURATION_FILE <<EOF
-static_resources:
-   listeners:
-   - name: main_listener
-      address:
-      socket_address:
-         address: 0.0.0.0
-         port_value: 443
-      filter_chains:
-      - filters:
-      - name: envoy.filters.network.http_connection_manager
-         typed_config:
-            "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
-            stat_prefix: ingress_http
-            server_name: lab.wansho.fr
-            preserve_external_request_id: true
-            access_log:
-            - name: envoy.access_loggers.stdout
-            typed_config:
-               "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
-            http_filters:
-            - name: envoy.filters.http.router
-            typed_config:
-               "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
-            route_config:
-            name: local_route
-            virtual_hosts:
-            - name: local_service
-               domains: ["*"]
-               require_tls: ALL
-               cors:
-                  allow_methods: 'OPTION, GET'
-               routes:
-               - match:
-                  prefix: "/"
-                  route:
-                  cluster: service_workstation
-                  cluster_not_found_response_code: SERVICE_UNAVAILABLE
-      transport_socket:
-         name: envoy.transport_sockets.tls
-         typed_config:
-            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
-            common_tls_context:
-            alpn_protocols: ["h2"]
-            tls_certificates:
-               - certificate_chain:
-                  filename: $SERVER_CERT_PATH
-                  private_key:
-                  filename: $SERVER_KEY_PATH
-   clusters:
-   - name: service_workstation
-      type: LOGICAL_DNS
-      # Comment out the following line to test on v6 networks
-      dns_lookup_family: V4_ONLY
-      lb_policy: ROUND_ROBIN
-      load_assignment:
-      cluster_name: service_workstation
-      endpoints:
-      - lb_endpoints:
-         - endpoint:
-            address:
-               socket_address:
-                  address: 10.1.0.2
-                  port_value: 443
-EOF
-
-if ! test -s $ENVOY_CONFIGURATION_FILE; then
-   error "Envoy default configuration file was not correctly written to $ENVOY_CONFIGURATION_FILE."
-fi
-info "Envoy default configuration file successfully written to $ENVOY_CONFIGURATION_FILE."
-
-
-info "Adding server SSL private key."
-if [ -z "$SERVER_KEY" ]; then
-   error "The environment variable SERVER_KEY is empty."
-fi
-echo -n "$SERVER_KEY" | base64 --decode > "$SERVER_KEY_PATH"
-chmod 400 "$SERVER_KEY_PATH"
-if ! test -s "$SERVER_KEY_PATH"; then
-   error "The server SSL private key was not correctly written on file $SERVER_KEY_PATH."
-fi
-info "Server SSL private key successfully written on file $SERVER_KEY_PATH."
-
-
-info "Adding server SSL certificate."
-if [ -z "$SERVER_CERT" ]; then
-   error "No public certificate SERVER_CERT found."
-fi
-echo -n "$SERVER_CERT" | base64 --decode > $SERVER_CERT_PATH
-chmod 600 $SERVER_CERT_PATH
-if ! test -s $SERVER_CERT_PATH; then
-   error "The server SSL certificate was not correctly written on file $SERVER_CERT_PATH."
-fi
-info "Server SSL certificate successfully written on file $SERVER_CERT_PATH."
-
-
-info "Testing if public and private SSL keys of server match."
-if ! [ "$(openssl rsa -noout -modulus -in $SERVER_KEY_PATH | openssl md5)"=="$(openssl x509 -noout -modulus -in $SERVER_CERT_PATH | openssl md5)" ]; then
-   error "Public and private SSL keys of server do not match."
-fi
-info "Public and private SSL keys of server match."
 
 info "Testing envoy configuration file."
 if ! $ENVOY_PATH --mode validate -c $ENVOY_CONFIGURATION_FILE; then
