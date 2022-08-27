@@ -43,9 +43,9 @@ static_resources:
                   alpn_protocols: ["h2"]
                   tls_certificates:
                       - certificate_chain:
-                          filename: $SERVER_CERT_PATH
+                          filename: ${SERVER_CERT_PATH}
                         private_key:
-                          filename: $SERVER_KEY_PATH
+                          filename: ${SERVER_KEY_PATH}
   clusters:
     - name: service_workstation
       type: LOGICAL_DNS
