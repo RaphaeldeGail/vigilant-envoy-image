@@ -1,0 +1,20 @@
+name: CodeControl
+on:
+ push:
+jobs:
+  packer:
+    runs-on: ubuntu-20.04
+    container:
+      image: raphaeldegail/packer:1.8.0
+    env:
+      PKR_VAR_workspace: "{name=\"name\", project=\"project\", region=\"region\"}"
+      PKR_VAR_machine: "{source_image_family=\"source\", certificate_keystore={private=\"private\", public=\"public\"}}"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Check format of Packer script
+        run: packer fmt -check .
+      - name: Initialize packer with plugins
+        run: packer init .
+      - name: Validate Packer script
+        run: packer validate .
