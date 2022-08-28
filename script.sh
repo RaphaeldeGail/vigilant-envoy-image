@@ -1,52 +1,47 @@
 #!/bin/bash
 
 # Define global shortcuts and variables
-
 ## Environment variables for executables
 export DEBIAN_FRONTEND=noninteractive
 
-## Variables for script
-ENVOY_PATH='/usr/local/bin/envoy'
-ENVOY_DIRECTORY='/etc/envoy'
-ENVOY_CONFIGURATION_FILE="$ENVOY_DIRECTORY/envoy.yaml"
-ENVOY_SERVICE_FILE='/etc/systemd/system/envoy.service'
-
+# Define functions
 get () {
    apt-get install -y -qq --no-show-upgraded $@ 1>/dev/null
    return $?
 }
 
 info () {
-   echo "$(date) - $(hostname) - [INFO] - $*"
+   echo "[$(date -I'seconds')][$(hostname)][INFO] : $*"
    return 0
 }
 
 error () {
-   echo "$(date) - $(hostname) - [ERROR] - $*" >&2
+   echo "[$(date -I'seconds')][$(hostname)][ERROR] : $*" >&2
    echo "********** Build Failed. **********" >&2
    exit 1
-   return 1
-}
-
-envoy_config () {
-   mkdir -p $ENVOY_DIRECTORY
-   echo -ne "$ENVOY_CONFIGURATION" | base64 --decode >$ENVOY_CONFIGURATION_FILE
-
-   if ! test -s $ENVOY_CONFIGURATION_FILE; then
-      error "Envoy default configuration file was not correctly written to $ENVOY_CONFIGURATION_FILE."
-   fi
-   cat $ENVOY_CONFIGURATION_FILE
    return 0
 }
 
-ssl_keys () {
+envoy_config () {
+   info "Loading envoy default configuration file."
+   mkdir -p $ENVOY_DIRECTORY
+   echo -n "$ENVOY_CONFIGURATION" | base64 --decode >$ENVOY_CONFIGURATION_FILE
+   if ! test -s $ENVOY_CONFIGURATION_FILE; then
+      error "Envoy default configuration file was not correctly written to $ENVOY_CONFIGURATION_FILE."
+      return 1
+   fi
+   info "Envoy default configuration file successfully written to $ENVOY_CONFIGURATION_FILE."
+   return 0
+}
+
+ssl_config () {
    info "Adding server SSL private key."
    if [ -z "$SERVER_KEY" ]; then
       error "The environment variable SERVER_KEY is empty."
    fi
-   echo -n "$SERVER_KEY" | base64 --decode > "$SERVER_KEY_PATH"
-   chmod 400 "$SERVER_KEY_PATH"
-   if ! test -s "$SERVER_KEY_PATH"; then
+   echo -n "$SERVER_KEY" | base64 --decode >$SERVER_KEY_PATH
+   chmod 400 $SERVER_KEY_PATH
+   if ! test -s $SERVER_KEY_PATH; then
       error "The server SSL private key was not correctly written on file $SERVER_KEY_PATH."
    fi
    info "Server SSL private key successfully written on file $SERVER_KEY_PATH."
@@ -55,7 +50,7 @@ ssl_keys () {
    if [ -z "$SERVER_CERT" ]; then
       error "No public certificate SERVER_CERT found."
    fi
-   echo -n "$SERVER_CERT" | base64 --decode > $SERVER_CERT_PATH
+   echo -n "$SERVER_CERT" | base64 --decode >$SERVER_CERT_PATH
    chmod 600 $SERVER_CERT_PATH
    if ! test -s $SERVER_CERT_PATH; then
       error "The server SSL certificate was not correctly written on file $SERVER_CERT_PATH."
@@ -67,43 +62,31 @@ ssl_keys () {
       error "Public and private SSL keys of server do not match."
    fi
    info "Public and private SSL keys of server match."
+
+   info "SSL keys succesfully loaded."
    return 0
 }
 
-install () {
-   gsutil cp gs://main-lab-v1-executables/envoy-v1.21.0 $ENVOY_PATH
+install_envoy () {
+   info "Downloading Envoy binary."
+   gsutil -q cp gs://main-lab-v1-executables/envoy-v1.21.0 $ENVOY_PATH
    chmod 555 $ENVOY_PATH
    if ! envoy --version; then
       error "Could not execute Envoy binary."
    fi
-   return 0
-}
+   info "Envoy binary succesfully download."
 
-test_envoy () {
-   if ! $ENVOY_PATH --mode validate -c $ENVOY_CONFIGURATION_FILE; then
-   error "Could not start with the default configuration."
+   info "Testing envoy configuration."
+   if ! $ENVOY_PATH --mode validate -c $ENVOY_CONFIGURATION_FILE 2>&1; then
+      error "Could not start Envoy with the default configuration."
    fi
+
+   info "Envoy is correctly configured."
    return 0
 }
 
 start_envoy () {
-cat >$ENVOY_SERVICE_FILE <<EOF
-   [Unit]
-   Description=The ENVOY proxy server
-   After=syslog.target network-online.target remote-fs.target nss-lookup.target
-   Wants=network-online.target
-
-   [Service]
-   Type=simple
-   PIDFile=/run/envoy.pid
-   ExecStartPre=/bin/bash -c "$ENVOY_PATH --mode validate -c $ENVOY_CONFIGURATION_FILE | tee"
-   ExecStart=/bin/bash -c "$ENVOY_PATH -c $ENVOY_CONFIGURATION_FILE | tee"
-   ExecStop=/bin/kill -s QUIT \$MAINPID
-   PrivateTmp=true
-
-   [Install]
-   WantedBy=multi-user.target
-EOF
+   echo -n "$ENVOY_SERVICE" | base64 --decode >$ENVOY_SERVICE_FILE
 
    if ! test -s $ENVOY_SERVICE_FILE; then
       error "Service file $ENVOY_SERVICE_FILE was not correctly written."
@@ -114,7 +97,7 @@ EOF
    if ! systemctl daemon-reload; then
       error "Sytemd could not read the envoy service file."
    fi
-   if ! systemctl enable envoy; then
+   if ! systemctl enable envoy 2>&1; then
       error "Systemd could not enable the envoy service at boot."
    fi
    info "Envoy service was succesfully loaded into systemd."
@@ -126,14 +109,22 @@ EOF
    if ! systemctl is-active envoy > /dev/null; then
       error "Envoy service is not active."
    fi
+   info "Envoy started."
+
+   sleep 10
+
+   info "Testing if Envoy HTTP proxy service is responding."
+   if [ "$(curl -k -s -o /dev/null -w '%{http_code}' 'https://127.0.0.1:443/')" != "200" ]; then
+      error "Envoy HTTP proxy service is not responding."
+   fi
+   info "Envoy HTTP proxy service is correctly responding."
    return 0
 }
 
 install_nginx () {
+   info "Installing Nginx default backend."
    apt-get update -qq --no-show-upgraded 1>/dev/null
    get nginx
-
-   sleep 10
 
    if ! systemctl is-active nginx > /dev/null; then
       error "Nginx service is not active."
@@ -159,47 +150,29 @@ post_install () {
    if ! test -s /etc/apt/apt.conf.d/20auto-upgrades; then
       error "Configuration file /etc/apt/apt.conf.d/20auto-upgrades was not correctly written."
    fi
-   if ! apt-get update -qq --no-show-upgraded >/dev/null; then
-      error "APT tool is wrongly configured."
-   fi
    info "APT auto-update succesfully disabled."
-   retrun 0
+   return 0
 }
 
 main () {
-   info "Loading envoy default configuration file."
    envoy_config
-   info "Envoy default configuration file successfully written to $ENVOY_CONFIGURATION_FILE."
 
-   info "Loading SSL keys."
-   ssl_keys
-   info "SSL keys succesfully loaded."
+   ssl_config
 
-   info "Install envoy executable."
-   install
-   info "Envoy executable succesfully installed."
+   install_envoy
 
-   info "Testing envoy configuration."
-   test_envoy
-   info "Envoy configuration is correct."
-
-   info "Starting Envoy as a service."
-   start_envoy
-   info "Envoy succesfully started as a service."
-
-   info "Installing simple Nginx server."
    install_nginx
-   info "Nginx HTTP service is correctly responding."
 
-   info "Post installation tasks."
+   start_envoy
+
    post_install
-   info "Post installation tasks succesfully ended."
+
    return 0
 } 
 
 # Set default umask for files created
 umask 0022
-
+# Main function
 main
 
 echo "********** Build was succesful. **********"

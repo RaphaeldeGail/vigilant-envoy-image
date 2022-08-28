@@ -59,5 +59,5 @@ static_resources:
             - endpoint:
                 address:
                     socket_address:
-                      address: 10.1.0.2
-                      port_value: 443
+                      address: 127.0.0.1
+                      port_value: 80
