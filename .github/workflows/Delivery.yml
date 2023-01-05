@@ -2,101 +2,34 @@ name: Delivery
 on:
   pull_request:
     types:
-      - opened
+      - closed
     branches:
       - 'main'
 jobs:
-  terrabuild:
+  release:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-20.04
-    outputs:
-      exitcode: ${{ steps.apply.outputs.exitcode }}
-    env:
-      TF_IN_AUTOMATION: "true"
-      TF_INPUT: 0
-      GOOGLE_CREDENTIALS: key.json
-    steps:
-      - name: Checkout terraform code
-        uses: actions/checkout@v3
-        with:
-          repository: RaphaeldeGail/probable-packer-infra
-      - name: HashiCorp - Setup Terraform
-        uses: hashicorp/setup-terraform@v1.2.1
-        with:
-          terraform_version: 1.1.2
-          terraform_wrapper: true
-      - name: Create the backend configuration file
-        env:
-          BACKEND_CONFIG: ${{ secrets.TF_BACKEND_CONFIG }}
-        run: |
-          echo $BACKEND_CONFIG | base64 --decode > config.bucket.tfbackend
-      - name: Create GCP authentication key.json
-        env:
-          CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
-        run: echo $CREDENTIALS | base64 --decode > ${{ env.GOOGLE_CREDENTIALS }}
-      - name: Initialize Terraform working directory
-        run: terraform init -reconfigure -no-color -backend-config=config.bucket.tfbackend
-      - name: Plan infrastructure update
-        env:
-          TF_VAR_workspace: ${{ secrets.WORKSPACE }}
-        run: terraform plan -no-color -out plan.out
-      - name: Apply infrastructure update
-        id: apply
-        run: terraform apply -no-color plan.out
-  packer:
-    runs-on: ubuntu-20.04
-    container:
-      image: raphaeldegail/packer:1.8.0
-    needs: [terrabuild]
-    if: needs.terrabuild.outputs.exitcode == 0
-    env:
-      GOOGLE_APPLICATION_CREDENTIALS: key.json
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
-      - name: Initialize packer with plugins
-        run: packer init .
-      - name: Create GCP authentication key.json
-        env:
-          CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
-        run: echo $CREDENTIALS | base64 --decode > ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
-      - name: Build Packer image
-        env:
-          PKR_VAR_workspace: ${{ secrets.WORKSPACE }}
-          PKR_VAR_machine: ${{ secrets.MACHINE }}
-          PKR_VAR_skip_create_image: false
-        run: packer build -color=false .
-  clean:
-    runs-on: ubuntu-20.04
-    needs: [packer]
-    if: ${{ always() }}
-    env:
-      TF_IN_AUTOMATION: "true"
-      TF_INPUT: 0
-      GOOGLE_CREDENTIALS: key.json
-    steps:
-      - name: Checkout terraform code
         uses: actions/checkout@v3
-        with:
-          repository: RaphaeldeGail/probable-packer-infra
-      - name: HashiCorp - Setup Terraform
-        uses: hashicorp/setup-terraform@v1.2.1
-        with:
-          terraform_version: 1.1.2
-          terraform_wrapper: true
-      - name: Create the backend configuration file
-        env:
-          BACKEND_CONFIG: ${{ secrets.TF_BACKEND_CONFIG }}
+      - name: Create GCP Import import.json
         run: |
-          echo $BACKEND_CONFIG | base64 --decode > config.bucket.tfbackend
-      - name: Create GCP authentication key.json
-        env:
-          CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
-        run: echo $CREDENTIALS | base64 --decode > ${{ env.GOOGLE_CREDENTIALS }}
-      - name: Initialize Terraform working directory
-        run: terraform init -reconfigure -no-color -backend-config=config.bucket.tfbackend
-      - name: Plan infrastructure destroy
-        env:
-          TF_VAR_workspace: ${{ secrets.WORKSPACE }}
-        run: terraform plan -no-color -destroy -out destroy.out
-      - name: Apply infrastructure destruction
-        run: terraform apply -no-color destroy.out
+          echo "${{ secrets.GOOGLE_IMPORT_CREDENTIALS }}" | base64 --decode > import.json
+      - name: Install JSONquery package to export release data
+        run: |
+          echo "CLIENT_EMAIL=$(cat import.json | jq -r .client_email)" >> $GITHUB_ENV
+          echo "RELEASE_PROJECT=$(cat import.json | jq -r .project_id)" >> $GITHUB_ENV
+          echo "VERSION=$(cat VERSION.txt | sed -e 's/\./-/g')" >> $GITHUB_ENV
+          echo "SHORT_COMMIT=$(echo ${{ github.event.pull_request.head.sha }} | cut -z -c1-10)" >> $GITHUB_ENV
+      - name: Release image to definitive project
+        run: |
+          gcloud auth activate-service-account $CLIENT_EMAIL --key-file=import.json
+          gcloud compute images create envoy-$VERSION-debian-11 \
+          --source-image=envoy-$VERSION-$SHORT_COMMIT-debian-11 \
+          --family="envoy-debian-11" \
+          --labels version=$VERSION,type=release,commit=$GITHUB_SHA \
+          --source-image-project="${{ secrets.WORKSPACE_PROJECT }}" \
+          --project=$RELEASE_PROJECT
+          gcloud compute images delete envoy-$VERSION-$SHORT_COMMIT-debian-11 --project="${{ secrets.WORKSPACE_PROJECT }}"
+          gcloud auth revoke $CLIENT_EMAIL
+          rm -f import.json

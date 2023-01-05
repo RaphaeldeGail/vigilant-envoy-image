@@ -48,8 +48,8 @@ build {
 
   provisioner "shell" {
     environment_vars = [
-      "SERVER_CERT=${var.machine.certificate_keystore.public}",
-      "SERVER_KEY=${var.machine.certificate_keystore.private}",
+      "SERVER_CERT=${var.machine.rsa_keystore.public}",
+      "SERVER_KEY=${var.machine.rsa_keystore.private}",
       "NAME=${var.workspace.name}",
       "SERVER_KEY_PATH=${local.server_key_path}",
       "SERVER_CERT_PATH=${local.server_cert_path}",
