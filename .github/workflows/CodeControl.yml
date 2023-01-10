@@ -1,20 +1,28 @@
 name: CodeControl
 on:
- push:
+  push:
+    branches-ignore:    
+      - 'main'
 jobs:
-  packer:
+  quality:
     runs-on: ubuntu-20.04
-    container:
-      image: raphaeldegail/packer:1.8.0
-    env:
-      PKR_VAR_workspace: "{name=\"name\", project=\"project\", region=\"region\"}"
-      PKR_VAR_machine: "{source_image_family=\"source\", certificate_keystore={private=\"private\", public=\"public\"}}"
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Check format of Packer script
+      - name: Checkout source code
+        uses: actions/checkout@v3
+      - name: Setup `packer`
+        uses: hashicorp/setup-packer@main
+        with:
+          version: "1.8.0"
+      - name: Check syntax
         run: packer fmt -check .
       - name: Initialize packer with plugins
+        env:
+          # Allow to increase the number of call for github repositories for initialization.
+          PACKER_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: packer init .
-      - name: Validate Packer script
+      - name: Validate code
+        env:
+          PKR_VAR_workspace: "{name=\"name\", project=\"project\", region=\"region\"}"
+          PKR_VAR_machine: "{source_image_family=\"source\", rsa_keystore={private=\"private\", public=\"public\"}}"
+          PKR_VAR_version: "{number=\"v1.2.3\", type=\"develop\", commit=\"abcd1234xyz999\"}"
         run: packer validate .

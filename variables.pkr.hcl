@@ -19,12 +19,12 @@ variable "workspace" {
 variable "machine" {
   type = object({
     source_image_family = string
-    certificate_keystore = object({
+    rsa_keystore = object({
       private = string
       public  = string
     })
   })
-  description = "The machine that will be used to create the packer image. Requires a **source_image_family** in GCP format and a **certificate_keystore** with both **private** and **public** keys base64 encoded. The **source_image_family** attribute can not be empty."
+  description = "The machine that will be used to create the packer image. Requires a **source_image_family** in GCP format and a **rsa_keystore** with both **private** and **public** keys base64 encoded. The **source_image_family** attribute can not be empty."
   sensitive   = true
 
   validation {

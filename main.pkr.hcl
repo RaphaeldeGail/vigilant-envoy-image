@@ -2,34 +2,36 @@ packer {
   required_version = ">= 1.8.0"
   required_plugins {
     googlecompute = {
-      version = "~> 1.0.10"
+      version = "~> 1.0.16"
       source  = "github.com/hashicorp/googlecompute"
     }
   }
 }
 
 source "googlecompute" "custom" {
-  project_id            = var.workspace.project
-  source_image_family   = var.machine.source_image_family
-  service_account_email = "main-lab-v1-executables-reader@lab-v1-0hw3q17w6a1y30jo-a5114.iam.gserviceaccount.com"
-  communicator          = "ssh"
-  ssh_username          = "packer-bot"
-  zone                  = "${var.workspace.region}-b"
-  skip_create_image     = var.skip_create_image
-  instance_name         = join("-", [var.workspace.name, "v{{ timestamp }}", var.machine.source_image_family])
+  project_id                      = var.workspace.project
+  source_image_family             = var.machine.source_image_family
+  disable_default_service_account = true
+  communicator                    = "ssh"
+  ssh_username                    = "packer-bot"
+  zone                            = "${var.workspace.region}-b"
+  skip_create_image               = var.skip_create_image
+  instance_name                   = join("-", [var.workspace.name, "v{{ timestamp }}", var.machine.source_image_family])
 
   image_name        = join("-", [var.workspace.name, "v{{ timestamp }}", var.machine.source_image_family])
   image_description = "Envoy customized image for HTTP service proxy, based on ${var.machine.source_image_family}"
   image_family      = join("-", [var.workspace.name, var.machine.source_image_family])
 
 
-  machine_type = "e2-micro"
+  machine_type = "e2-standard-16"
   network      = "${var.workspace.name}-network"
   subnetwork   = "${var.workspace.name}-subnet"
   tags         = [var.workspace.name]
 
-  disk_size = 10
-  disk_type = "pd-standard"
+  preemptible = true
+
+  disk_size = 50
+  disk_type = "pd-ssd"
 }
 
 locals {
@@ -48,8 +50,8 @@ build {
 
   provisioner "shell" {
     environment_vars = [
-      "SERVER_CERT=${var.machine.certificate_keystore.public}",
-      "SERVER_KEY=${var.machine.certificate_keystore.private}",
+      "SERVER_CERT=${var.machine.rsa_keystore.public}",
+      "SERVER_KEY=${var.machine.rsa_keystore.private}",
       "NAME=${var.workspace.name}",
       "SERVER_KEY_PATH=${local.server_key_path}",
       "SERVER_CERT_PATH=${local.server_cert_path}",

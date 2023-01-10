@@ -1,10 +1,11 @@
 name: Build
 on:
-  push:
+  pull_request:
+    types: [edited, opened, synchronize, reopened]
     branches:
-      - 'develop'
+      - 'main'
 jobs:
-  terrabuild:
+  setup-infra:
     runs-on: ubuntu-20.04
     outputs:
       exitcode: ${{ steps.apply.outputs.exitcode }}
@@ -17,54 +18,59 @@ jobs:
         uses: actions/checkout@v3
         with:
           repository: RaphaeldeGail/probable-packer-infra
-      - name: HashiCorp - Setup Terraform
-        uses: hashicorp/setup-terraform@v1.2.1
+      - name: Setup `terraform`
+        uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.1.2
           terraform_wrapper: true
-      - name: Create the backend configuration file
-        env:
-          BACKEND_CONFIG: ${{ secrets.TF_BACKEND_CONFIG }}
+      - name: Create secret configurations
         run: |
-          echo $BACKEND_CONFIG | base64 --decode > config.bucket.tfbackend
-      - name: Create GCP authentication key.json
-        env:
-          CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
-        run: echo $CREDENTIALS | base64 --decode > ${{ env.GOOGLE_CREDENTIALS }}
+          echo "${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}" | base64 --decode > ${{ env.GOOGLE_CREDENTIALS }}
       - name: Initialize Terraform working directory
-        run: terraform init -reconfigure -no-color -backend-config=config.bucket.tfbackend
+        run: terraform init -reconfigure -no-color -backend-config="bucket=${{ secrets.WORKSPACE_PROJECT }}" -backend-config="prefix=terraform/state/packer-infra-envoy"
       - name: Plan infrastructure update
         env:
-          TF_VAR_workspace: ${{ secrets.WORKSPACE }}
+          TF_VAR_workspace: "{name=\"envoy\", project=\"${{ secrets.WORKSPACE_PROJECT }}\", region=\"europe-west1\"}"
         run: terraform plan -no-color -out plan.out
       - name: Apply infrastructure update
         id: apply
-        run: terraform apply -no-color plan.out
-  packer:
+        run: |
+          terraform apply -no-color plan.out &&\
+          rm -f plan.out &&\
+          rm -f ${{ env.GOOGLE_CREDENTIALS }}
+  image:
     runs-on: ubuntu-20.04
-    container:
-      image: raphaeldegail/packer:1.8.0
-    needs: [terrabuild]
-    if: needs.terrabuild.outputs.exitcode == 0
+    needs: [setup-infra]
+    if: needs.setup-infra.outputs.exitcode == 0
     env:
       GOOGLE_APPLICATION_CREDENTIALS: key.json
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
+      - name: Setup `packer`
+        uses: hashicorp/setup-packer@main
+        with:
+          version: "1.8.0"
       - name: Initialize packer with plugins
+        env:
+          # Allow to increase the number of call for github repositories for initialization.
+          PACKER_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: packer init .
       - name: Create GCP authentication key.json
-        env:
-          CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
-        run: echo $CREDENTIALS | base64 --decode > ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
+        run: |
+          echo "${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}" | base64 --decode > ${{ env.GOOGLE_APPLICATION_CREDENTIALS }} &&\
+          echo "PKR_VAR_version={\"number\":\"$(cat VERSION.txt)\",\"type\":\"develop\",\"commit\":\"${{ github.event.pull_request.head.sha }}\"}" >> $GITHUB_ENV
       - name: Build Packer image
         env:
-          PKR_VAR_workspace: ${{ secrets.WORKSPACE }}
-          PKR_VAR_machine: ${{ secrets.MACHINE }}
-        run: packer build -color=false .
+          PKR_VAR_skip_create_image: ${{ github.event_name != 'pull_request' }}
+          PKR_VAR_workspace: "{name=\"envoy\", project=\"${{ secrets.WORKSPACE_PROJECT }}\", region=\"europe-west1\"}"
+          PKR_VAR_machine: "{source_image_family=\"debian-11\", rsa_keystore={public=\"${{ secrets.RSA_PUBLIC }}\", private=\"${{ secrets.RSA_PRIVATE }}\"}}"
+        run: |
+          packer build -color=false .
+          rm -f ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
   clean:
     runs-on: ubuntu-20.04
-    needs: [packer]
+    needs: [image]
     if: ${{ always() }}
     env:
       TF_IN_AUTOMATION: "true"
@@ -75,25 +81,22 @@ jobs:
         uses: actions/checkout@v3
         with:
           repository: RaphaeldeGail/probable-packer-infra
-      - name: HashiCorp - Setup Terraform
-        uses: hashicorp/setup-terraform@v1.2.1
+      - name: Setup `terraform`
+        uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.1.2
           terraform_wrapper: true
-      - name: Create the backend configuration file
-        env:
-          BACKEND_CONFIG: ${{ secrets.TF_BACKEND_CONFIG }}
+      - name: Create secret configurations
         run: |
-          echo $BACKEND_CONFIG | base64 --decode > config.bucket.tfbackend
-      - name: Create GCP authentication key.json
-        env:
-          CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
-        run: echo $CREDENTIALS | base64 --decode > ${{ env.GOOGLE_CREDENTIALS }}
+          echo "${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}" | base64 --decode > ${{ env.GOOGLE_CREDENTIALS }}
       - name: Initialize Terraform working directory
-        run: terraform init -reconfigure -no-color -backend-config=config.bucket.tfbackend
-      - name: Plan infrastructure destroy
+        run: terraform init -reconfigure -no-color -backend-config="bucket=${{ secrets.WORKSPACE_PROJECT }}" -backend-config="prefix=terraform/state/packer-infra-envoy"
+      - name: Plan infrastructure destruction
         env:
-          TF_VAR_workspace: ${{ secrets.WORKSPACE }}
-        run: terraform plan -no-color -destroy -out destroy.out
+          TF_VAR_workspace: "{name=\"envoy\", project=\"${{ secrets.WORKSPACE_PROJECT }}\", region=\"europe-west1\"}"
+        run: terraform plan -no-color -out plan.out
       - name: Apply infrastructure destruction
-        run: terraform apply -no-color destroy.out
+        run: |
+          terraform apply -no-color plan.out
+          rm -f plan.out
+          rm -f ${{ env.GOOGLE_CREDENTIALS }}
