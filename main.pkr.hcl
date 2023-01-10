@@ -9,14 +9,14 @@ packer {
 }
 
 source "googlecompute" "custom" {
-  project_id            = var.workspace.project
-  source_image_family   = var.machine.source_image_family
-  service_account_email = "main-lab-v1-executables-reader@lab-v1-0hw3q17w6a1y30jo-a5114.iam.gserviceaccount.com"
-  communicator          = "ssh"
-  ssh_username          = "packer-bot"
-  zone                  = "${var.workspace.region}-b"
-  skip_create_image     = var.skip_create_image
-  instance_name         = join("-", [var.workspace.name, "v{{ timestamp }}", var.machine.source_image_family])
+  project_id                      = var.workspace.project
+  source_image_family             = var.machine.source_image_family
+  disable_default_service_account = true
+  communicator                    = "ssh"
+  ssh_username                    = "packer-bot"
+  zone                            = "${var.workspace.region}-b"
+  skip_create_image               = var.skip_create_image
+  instance_name                   = join("-", [var.workspace.name, "v{{ timestamp }}", var.machine.source_image_family])
 
   image_name        = join("-", [var.workspace.name, "v{{ timestamp }}", var.machine.source_image_family])
   image_description = "Envoy customized image for HTTP service proxy, based on ${var.machine.source_image_family}"
