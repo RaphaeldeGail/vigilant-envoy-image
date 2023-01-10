@@ -23,13 +23,15 @@ source "googlecompute" "custom" {
   image_family      = join("-", [var.workspace.name, var.machine.source_image_family])
 
 
-  machine_type = "e2-micro"
+  machine_type = "e2-standard-16"
   network      = "${var.workspace.name}-network"
   subnetwork   = "${var.workspace.name}-subnet"
   tags         = [var.workspace.name]
 
-  disk_size = 10
-  disk_type = "pd-standard"
+  preemptible = true
+
+  disk_size = 50
+  disk_type = "pd-ssd"
 }
 
 locals {
